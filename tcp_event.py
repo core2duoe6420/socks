@@ -75,64 +75,70 @@ class TcpStream:
         if self.eof():
             raise StreamClosed()
 
-    def read_all(self):
+    def read_all(self, keep_in_stream=False):
         self._read_check()
         ret = self._buf
-        self._buf = ""
+        if not keep_in_stream:
+            self._buf = ""
         return ret
 
-    def _do_read_binary(self, data_type, size, little_endian):
+    def _do_read_binary(self, data_type, size, little_endian, keep_in_stream):
         self._read_check()
         if len(self._buf) < size:
             raise ResourceError()
 
         buf = self._buf[:size]
-        self._buf = self._buf[size:]
+        if not keep_in_stream:
+            self._buf = self._buf[size:]
         return struct.unpack(self._get_format(data_type, size, little_endian), buf)[0]
 
-    def read_bin_int(self, size=4, little_endian=False):
-        return self._do_read_binary(int, size, little_endian)
+    def read_bin_int(self, size=4, little_endian=False, keep_in_stream=False):
+        """keep_in_stream为True时会将读取的数据继续保留在流中，下次读取还会读出"""
+        return self._do_read_binary(int, size, little_endian, keep_in_stream)
 
-    def read_bin_float(self, size=4, little_endian=False):
-        return self._do_read_binary(float, size, little_endian)
+    def read_bin_float(self, size=4, little_endian=False, keep_in_stream=False):
+        return self._do_read_binary(float, size, little_endian, keep_in_stream)
 
-    def read_bin(self, size):
+    def read_bin(self, size, keep_in_stream=False):
         """该函数返回的是类型是str，不是数组"""
         self._read_check()
         if len(self._buf) < size:
             raise ResourceError()
 
         ret = self._buf[:size]
-        self._buf = self._buf[size:]
+        if not keep_in_stream:
+            self._buf = self._buf[size:]
         return ret
 
-    def read_int(self):
-        return int(self.read_word())
+    def read_int(self, keep_in_stream=False):
+        return int(self.read_word(keep_in_stream))
 
-    def read_line(self):
+    def read_line(self, keep_in_stream=False):
         self._read_check()
         index = self._buf.find("\n")
         if index == -1:
             if self._eof:
-                return self.read_all()
+                return self.read_all(keep_in_stream)
             else:
                 raise ResourceError()
 
         ret = self._buf[:index + 1]
-        self._buf = self._buf[index + 1:]
+        if not keep_in_stream:
+            self._buf = self._buf[index + 1:]
         return ret
 
-    def read_word(self):
+    def read_word(self, keep_in_stream=False):
         self._read_check()
         p = re.compile(r"\W\n?")
         match = p.search(self._buf)
         if match:
             ret = self._buf[:match.start(0)]
-            self._buf = self._buf[match.end(0):]
+            if not keep_in_stream:
+                self._buf = self._buf[match.end(0):]
             return ret
         else:
             if self._eof:
-                return self.read_all()
+                return self.read_all(keep_in_stream)
             else:
                 raise ResourceError()
 
@@ -163,12 +169,12 @@ class TcpEvent:
     def _setup_read_event(self, sock, handler):
         self._io.modify_sock(sock, io_event.EVT_READ, handler)
 
-    def get_input_stream(self, sock):
+    def get_istream(self, sock):
         if sock not in self._sock_set:
             raise StreamNotExist()
         return self._sock_set[sock]["in"]
 
-    def get_output_stream(self, sock):
+    def get_otream(self, sock):
         if sock not in self._sock_set:
             raise StreamNotExist()
         self._setup_write_event(sock, self._on_write)
@@ -207,8 +213,8 @@ class TcpEvent:
     def _on_read(self, sock):
         sock_info = self._sock_set[sock]
         if EVT_IN in sock_info:
-            input_stream = sock_info["in"]
-            output_stream = sock_info["out"]
+            istream = sock_info["in"]
+            ostream = sock_info["out"]
             while True:
                 try:
                     buf = sock.recv(10240)
@@ -220,19 +226,19 @@ class TcpEvent:
                         self._on_error(sock, e.errno)
                         return
                 if buf:
-                    input_stream.write(buf)
+                    istream.write(buf)
                 else:
                     # 对端正常关闭连接
                     self._setup_read_event(sock, None)
-                    input_stream.close()
+                    istream.close()
                     break
 
             # 回调程序读取数据时应该负责捕获StreamClosed()异常
-            sock_info[EVT_IN](sock, input_stream, output_stream)
-            self._send_out_stream(sock)
+            sock_info[EVT_IN](sock, istream, ostream)
+            self._send_ostream(sock)
 
             # 如果对端关闭连接，且out流中的数据已经全部发送，关闭sock
-            if input_stream.closed() and len(output_stream) == 0:
+            if istream.closed() and len(ostream) == 0:
                 self._close_sock(sock, "peer close socket")
 
         elif EVT_ACCEPT in sock_info:
@@ -254,16 +260,16 @@ class TcpEvent:
 
     def _on_write(self, sock):
         sock_info = self._sock_set[sock]
-        input_stream = sock_info["in"]
-        output_stream = sock_info["out"]
+        istream = sock_info["in"]
+        ostream = sock_info["out"]
         if EVT_CONNECT in sock_info:
-            sock_info[EVT_CONNECT](sock, input_stream, output_stream)
+            sock_info[EVT_CONNECT](sock, istream, ostream)
             del sock_info[EVT_CONNECT]
 
         if EVT_OUT in sock_info:
-            sock_info[EVT_OUT](sock, input_stream, output_stream)
+            sock_info[EVT_OUT](sock, istream, ostream)
 
-        self._send_out_stream(sock)
+        self._send_ostream(sock)
 
     def _on_error(self, sock, err_code=-1):
         sock_info = self._sock_set[sock]
@@ -273,11 +279,11 @@ class TcpEvent:
             sock_info[EVT_ERR](sock, err_code)
         self._close_sock(sock, "error occurs")
 
-    def _send_out_stream(self, sock):
+    def _send_ostream(self, sock):
         sock_info = self._sock_set[sock]
-        output_stream = sock_info["out"]
+        ostream = sock_info["out"]
         try:
-            buf = output_stream.read_all()
+            buf = ostream.read_all()
             while len(buf) > 0:
                 try:
                     write_len = sock.send(buf)
@@ -286,7 +292,7 @@ class TcpEvent:
                     _log.warning("socket write error, fd=%d, %s" % (sock.fileno(), os.strerror(e.errno)))
                     if e.errno == errno.EWOULDBLOCK:
                         self._setup_write_event(sock, self._on_write)
-                        output_stream.write(buf, skip_check=True)
+                        ostream.write(buf, skip_check=True)
                         return
                     else:
                         self._on_error(sock, e.errno)
@@ -297,7 +303,7 @@ class TcpEvent:
         except StreamClosed:
             pass
 
-        if output_stream.eof():
+        if ostream.eof():
             # 如果用户结束了输出流，且流中数据已经全部发送，shutdown连接
             self._close_sock(sock, "user close output stream")
             # shutdown在linux下会使socket清理不干净，改用close
