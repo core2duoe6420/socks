@@ -9,10 +9,10 @@ import socks_base
 _log = logger.Logger("socks5")
 
 
-class Socks5Proxy(socks_base.SocksBase):
+class Socks5Proxy(socks_base.SocksPairBase):
 
     def __init__(self, listen_port):
-        socks_base.SocksBase.__init__(self, listen_port)
+        super(Socks5Proxy, self).__init__(listen_port)
 
     def _on_accept(self, server_sock, new_sock):
         new_sock.setblocking(False)

@@ -9,11 +9,11 @@ import yass_base
 _log = logger.Logger("yass_server")
 
 
-class YASSServer(yass_base.YASSBase):
+class YASSServer(yass_base.YASSPairBase):
     """yet another shadowsocks"""
 
     def __init__(self, config):
-        yass_base.YASSBase.__init__(self, config, "server")
+        yass_base.YASSPairBase.__init__(self, config, "server")
 
     def _on_read(self, sock, istream, ostream):
         if sock not in self._pairs:
