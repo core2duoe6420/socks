@@ -11,6 +11,105 @@ import errno
 _log = logger.Logger("socks_base")
 
 
+class PairSockSet(object):
+    SOCK_CLIENT = 1
+    SOCK_SERVER = 2
+
+    def __init__(self):
+        self._pairs = {}
+        self._stat = {"pairs": []}
+
+    def add_sock(self, sock_type, sock):
+        if sock_type != self.SOCK_CLIENT:
+            raise ValueError("invalid socket type")
+
+        server_sock = socket.socket()
+        server_sock.setblocking(False)
+        pair = {
+            "client": sock,
+            "server": server_sock,
+            "status": -1,
+            "info_index": len(self._stat["pairs"])
+        }
+        self._pairs[sock] = self._pairs[server_sock] = pair
+
+        self._stat["pairs"].append({"client": self._make_sock_info(sock),
+                                    "server": {"fd": server_sock.fileno()},
+                                    "domain": "not connected"})
+
+    def get_sock_attr(self, sock, attr):
+        if attr == "status":
+            return self._pairs[sock]["status"]
+
+    def set_sock_attr(self, sock, **kwargs):
+        pair = self._pairs[sock]
+        pair_info = self._get_pair_info(pair)
+        if "status" in kwargs:
+            self._pairs[sock]["status"] = kwargs["status"]
+        if "end_time" in kwargs:
+            pair_info["server"]["end"] = kwargs["end_time"]
+            pair_info["client"]["end"] = kwargs["end_time"]
+        if "domain" in kwargs:
+            pair_info["domain"] = kwargs["domain"]
+        if "make_server_info" in kwargs:
+            pair_info["server"] = self._make_sock_info(sock)
+
+    def get_peer_sock(self, sock):
+        pair = self._pairs[sock]
+        if sock == pair["client"]:
+            return pair["server"]
+        else:
+            return pair["client"]
+
+    def del_sock(self, sock):
+        peer_sock = self.get_peer_sock(sock)
+        del self._pairs[peer_sock]
+        del self._pairs[sock]
+
+    def sock_type(self, sock):
+        pair = self._pairs[sock]
+        if sock == pair["client"]:
+            return self.SOCK_CLIENT
+        else:
+            return self.SOCK_SERVER
+
+    def __contains__(self, sock):
+        return sock in self._pairs
+
+    @staticmethod
+    def _make_sock_info(sock):
+        local_ip, local_port = sock.getsockname()
+        remote_ip, remote_port = sock.getpeername()
+        return {
+            "fd": sock.fileno(),
+            "local": local_ip + ":" + str(local_port),
+            "remote": remote_ip + ":" + str(remote_port),
+            "start": _log.datetime(),
+            "end": "0"
+        }
+
+    @staticmethod
+    def _print_sock_info(sock_info):
+        info = ", ".join(["=".join((str(k), str(v))) for k, v in sock_info.items()])
+        _log.debug("socket info: %s" % info)
+
+    def _print_pair_info(self, pair_info):
+        _log.debug("pair info: server_fd=%d, client_fd=%d, domain=%s"
+                   % (pair_info["server"]["fd"], pair_info["client"]["fd"], pair_info["domain"]))
+        self._print_sock_info(pair_info["server"])
+        self._print_sock_info(pair_info["client"])
+        _log.blank_line()
+        _log.flush()
+
+    def _get_pair_info(self, pair):
+        return self._stat["pairs"][pair["info_index"]]
+
+    def print_sock_info(self, sock):
+        pair = self._pairs[sock]
+        pair_info = self._get_pair_info(pair)
+        self._print_pair_info(pair_info)
+
+
 class SocksBase(object):
     ST_BEGIN = 1
     ST_AUTH = 2
@@ -118,43 +217,3 @@ class SocksBase(object):
             return "\x05\x00\x00" + SocksBase._pack_socks_address(addr_type, bind_addr, bind_port)
         else:
             return "\x05" + struct.pack("!B", reply) + "\x00\x01\x00\x00\x00\x00\x00\x00"
-
-
-class SocksPairBase(SocksBase):
-    """使用成对连接的socks客户端和服务器的基类
-    成对连接是指浏览器与yass_client的连接和
-    yass_client与yass_server的连接是一对一的。
-    self._pair存放映射关系，self._stat存放一些历史信息
-    """
-    def __init__(self, listen_port):
-        super(SocksPairBase, self).__init__(listen_port)
-        self._pairs = {}
-        self._stat = {"pairs": []}
-
-    @staticmethod
-    def _make_sock_info(sock):
-        local_ip, local_port = sock.getsockname()
-        remote_ip, remote_port = sock.getpeername()
-        return {
-            "fd": sock.fileno(),
-            "local": local_ip + ":" + str(local_port),
-            "remote": remote_ip + ":" + str(remote_port),
-            "start": _log.datetime(),
-            "end": "0"
-        }
-
-    @staticmethod
-    def _print_sock_info(sock_info):
-        info = ", ".join(["=".join((str(k), str(v))) for k, v in sock_info.items()])
-        _log.debug("socket info: %s" % info)
-
-    def _print_pair_info(self, pair_info):
-        _log.debug("pair info: server_fd=%d, client_fd=%d, domain=%s"
-                   % (pair_info["server"]["fd"], pair_info["client"]["fd"], pair_info["domain"]))
-        self._print_sock_info(pair_info["server"])
-        self._print_sock_info(pair_info["client"])
-        _log.blank_line()
-        _log.flush()
-
-    def _get_pair_info(self, pair):
-        return self._stat["pairs"][pair["info_index"]]
