@@ -26,7 +26,7 @@ class Select(object):
         self._sock_lists = {}
         for event in _events:
             self._sock_lists[event] = []
-        self._log = logger.Logger(self.__class__.__name__)
+        self._log = logger.Logger(self.__class__.__name__, log_file=None)
 
     def add_sock(self, sock, **kwargs):
         self._sock_set[sock] = kwargs
@@ -68,7 +68,8 @@ class Select(object):
         elif handler is None and exist_in_list:
             sock_list.remove(sock)
 
-        self._log.info("modify socket, fd=%d, event=%s, handler=%s" % (sock.fileno(), event, str(handler)))
+        self._log.info("modify socket, fd=%d, event=%s, handler=%s" %
+                       (sock.fileno(), event, str(handler)))
 
     def _print_list(self, name, event_list):
         self._log.debug("%s: " % name + ",".join([str(x.fileno()) for x in event_list]))
@@ -123,7 +124,7 @@ class Epoll(object):
     def __init__(self):
         self._sock_set = {}
         self._epoll = select.epoll()
-        self._log = logger.Logger(self.__class__.__name__)
+        self._log = logger.Logger(self.__class__.__name__, log_file=None)
 
     def add_sock(self, sock, **kwargs):
         kwargs["sock"] = sock
@@ -161,13 +162,13 @@ class Epoll(object):
             event_mask |= select.EPOLLOUT
 
         self._epoll.modify(sock.fileno(), event_mask)
-        self._log.info("modify socket, fd=%d, event=%s, handler=%s" % (sock.fileno(), event, str(handler)))
+        self._log.info("modify socket, fd=%d, event=%s, handler=%s" %
+                       (sock.fileno(), event, str(handler)))
 
     def _print_list(self, name, event_list):
         self._log.debug("%s: " % name + ",".join(map(str, event_list)))
 
     def _print_lists(self, events):
-        pass
         self._log.blank_line()
         self._print_list("INT", self._sock_set.keys())
         self._print_list("EVT", [x[0] for x in events])

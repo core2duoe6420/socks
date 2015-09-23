@@ -8,7 +8,7 @@ class YASSClient(yass_base.YASSOneToOneBase):
     """yet another shadowsocks"""
 
     def __init__(self, config):
-        yass_base.YASSOneToOneBase.__init__(self, config, "client")
+        super(YASSClient, self).__init__(config, "client")
 
     def _on_read(self, sock, istream, ostream):
         if sock not in self._set:

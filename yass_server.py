@@ -9,7 +9,7 @@ class YASSServer(yass_base.YASSOneToOneBase):
     """yet another shadowsocks"""
 
     def __init__(self, config):
-        yass_base.YASSOneToOneBase.__init__(self, config, "server")
+        super(YASSServer, self).__init__(config, "server")
 
     def _on_read(self, sock, istream, ostream):
         if sock not in self._set:

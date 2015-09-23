@@ -10,14 +10,18 @@ class YASS2Server(yass_base.YASSMultiToOneBase):
         super(YASS2Server, self).__init__(config, "server")
 
     def _on_accept(self, server_sock, new_sock):
-        self._log.info("accept yass2 client success")
         new_sock.setblocking(False)
         self._set.add_sock(self._set.SOCK_END, new_sock)
-        self._set.print_sock_stat(new_sock)
+        self._set.print_sock_stat(new_sock, "accept client")
         self._io.add_sock(new_sock,
                           on_receive=self._on_read,
                           on_close=self._on_close,
                           on_error=self._on_error)
+
+    def _on_connect(self, sock, istream, ostream):
+        if sock in self._set:
+            self._set.set_sock_attr(sock, make_stat="conn")
+            self._set.print_sock_stat(sock, "connect success")
 
     def _on_read(self, sock, istream, ostream):
         sock_type = self._set.sock_type(sock)
@@ -61,6 +65,7 @@ class YASS2Server(yass_base.YASSMultiToOneBase):
                         continue
                     self._set.add_sock(self._set.SOCK_CONN, conn_sock, conn_id)
                     self._set.set_sock_attr(conn_sock, domain=addr)
+                    self._set.print_sock_stat(sock, "add socket")
 
         elif sock_type == self._set.SOCK_CONN:
             try:

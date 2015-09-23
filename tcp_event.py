@@ -6,7 +6,6 @@ import io_event
 import struct
 import re
 import logger
-import os
 
 
 EVT_IN = "on_receive"
@@ -29,7 +28,7 @@ class StreamNotExist(Exception):
     pass
 
 
-class TcpStream:
+class TcpStream(object):
 
     def __init__(self):
         self._buf = ""
@@ -156,12 +155,12 @@ class TcpStream:
         return len(self._buf)
 
 
-class TcpEvent:
+class TcpEvent(object):
 
     def __init__(self):
         self._io = io_event.get_event_loop()
         self._sock_set = {}
-        self._log = logger.Logger(self.__class__.__name__)
+        self._log = logger.Logger(self.__class__.__name__, log_file=None)
 
     def _setup_write_event(self, sock, handler):
         self._io.modify_sock(sock, io_event.EVT_WRITE, handler)
@@ -219,7 +218,8 @@ class TcpEvent:
                 try:
                     buf = sock.recv(10240)
                 except socket.error, e:
-                    self._log.warning("socket read error, fd=%d, %s" % (sock.fileno(), os.strerror(e.errno)))
+                    # self._log.warning("socket read error, fd=%d, %s" %
+                    #                   (sock.fileno(), os.strerror(e.errno)))
                     if e.errno == errno.EWOULDBLOCK:
                         break
                     else:
@@ -246,7 +246,8 @@ class TcpEvent:
                 try:
                     new_sock, addr = sock.accept()
                 except socket.error, e:
-                    self._log.warning("socket accept error, fd=%d, %s" % (sock.fileno(), os.strerror(e.errno)))
+                    # self._log.warning("socket accept error, fd=%d, %s" %
+                    #                   (sock.fileno(), os.strerror(e.errno)))
                     if e.errno == errno.EWOULDBLOCK:
                         break
                     else:
@@ -289,7 +290,8 @@ class TcpEvent:
                     write_len = sock.send(buf)
                     buf = buf[write_len:]
                 except socket.error, e:
-                    self._log.warning("socket write error, fd=%d, %s" % (sock.fileno(), os.strerror(e.errno)))
+                    # self._log.warning("socket write error, fd=%d, %s" %
+                    #                   (sock.fileno(), os.strerror(e.errno)))
                     if e.errno == errno.EWOULDBLOCK:
                         self._setup_write_event(sock, self._on_write)
                         ostream.write(buf, skip_check=True)

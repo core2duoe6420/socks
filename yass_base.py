@@ -26,10 +26,19 @@ class YASSBase(socks_base.SocksBase):
                           on_close=self._on_close,
                           on_error=self._on_error)
 
+    def _record(self, action, conn_id, data):
+        """把传输的内容记录到文件中，调试用"""
+        f = open("record/%s_%s_%d.txt" %
+                 (self._config["actor"], action, conn_id), "a")
+        f.write(data)
+        f.close()
+
     def _send_frame(self, data, ostream, frame_type=None, conn_id=None):
         if frame_type is not None:
+            self._record("send", conn_id, data)
+
             plaintext = struct.pack("!BI", frame_type, conn_id) + data
-            self._log.debug("send frame, type=%d, id=%d" % (frame_type, conn_id))
+            # self._log.debug("send frame, type=%d, id=%d" % (frame_type, conn_id))
         else:
             plaintext = data
         ciphertext = cipher.encrypt(self._config["key"], plaintext)
@@ -51,7 +60,9 @@ class YASSBase(socks_base.SocksBase):
         if frame:
             frame_type, conn_id = struct.unpack("!BI", plaintext[:5])
             data = plaintext[5:]
-            self._log.debug("recv frame, type=%d, id=%d" % (frame_type, conn_id))
+
+            self._record("recv", conn_id, data)
+            # self._log.debug("recv frame, type=%d, id=%d" % (frame_type, conn_id))
             return frame_type, conn_id, data
         else:
             return plaintext

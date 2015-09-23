@@ -172,6 +172,8 @@ class MultiToOneSockSet(object):
         return self._ends.keys()[0]
 
     def del_sock(self, sock):
+        self.set_sock_attr(sock, end_time=self._log.datetime())
+        self.print_sock_stat(sock, "close socket")
         if sock in self._conns:
             del self._conns[sock]
         elif sock in self._ends:
@@ -212,11 +214,11 @@ class MultiToOneSockSet(object):
             "domain": "not connected"
         }
 
-    def print_sock_stat(self, sock):
+    def print_sock_stat(self, sock, action):
         sock_info = self._get_sock_info(sock)
         sock_stat = self._stat[sock_info["stat_index"]]
-        info = ", ".join(["=".join((str(k), str(v))) for k, v in sock_stat.items()])
-        self._log.debug("socket stat: %s" % info)
+        stat = ", ".join(["=".join((str(k), str(v))) for k, v in sock_stat.items()])
+        self._log.debug("%s: %s" % (action, stat))
 
 
 class SocksBase(object):
