@@ -2,22 +2,18 @@
 
 import tcp_event
 import socket
-import logger
 import socks_base
-
-
-_log = logger.Logger("socks5")
 
 
 class Socks5Proxy(socks_base.SocksBase):
 
     def __init__(self, listen_port):
         super(Socks5Proxy, self).__init__(listen_port)
-        self._set = socks_base.PairSockSet()
+        self._set = socks_base.OneToOneSockSet(self._log)
 
     def _on_accept(self, server_sock, new_sock):
         new_sock.setblocking(False)
-        self._set.add_sock(socks_base.PairSockSet.SOCK_CLIENT, new_sock)
+        self._set.add_sock(socks_base.OneToOneSockSet.SOCK_CLIENT, new_sock)
         self._set.set_sock_attr(new_sock, status=self.ST_BEGIN)
         self._io.add_sock(new_sock,
                           on_receive=self._on_read,
@@ -29,11 +25,11 @@ class Socks5Proxy(socks_base.SocksBase):
         if sock not in self._set:
             return
 
-        self._set.set_sock_attr(sock, end_time=_log.datetime())
-        _log.debug("closing pair")
-        self._set.print_sock_info(sock)
+        self._set.set_sock_attr(sock, end_time=self._log.datetime())
+        self._log.debug("closing pair")
+        self._set.print_sock_stat(sock)
 
-        peer = self._set.get_peer_sock(sock)
+        peer = self._set.get_tunnel_sock(sock)
 
         if self._set.sock_type(sock) == self._set.SOCK_SERVER:
             if self._set.get_sock_attr(sock, "status") == self.ST_AUTH:
@@ -52,6 +48,7 @@ class Socks5Proxy(socks_base.SocksBase):
     def _on_read(self, sock, istream, ostream):
         if sock not in self._set:
             return
+
         status = self._set.get_sock_attr(sock, "status")
         if status == self.ST_BEGIN:
             try:
@@ -80,7 +77,7 @@ class Socks5Proxy(socks_base.SocksBase):
                 ostream.close()
                 return
 
-            server = self._set.get_peer_sock(sock)
+            server = self._set.get_tunnel_sock(sock)
             try:
                 self._connect(server, addr, port)
             except socket.error:
@@ -94,7 +91,7 @@ class Socks5Proxy(socks_base.SocksBase):
             self._set.set_sock_attr(sock, domain=addr)
 
         elif status == self.ST_DATA:
-            peer = self._set.get_peer_sock(sock)
+            peer = self._set.get_tunnel_sock(sock)
 
             peer_ostream = self._io.get_otream(peer)
             try:
@@ -116,12 +113,12 @@ class Socks5Proxy(socks_base.SocksBase):
             raise ValueError("server does not match")
         # 我们连接成功了
         addr, port = sock.getsockname()
-        client = self._set.get_peer_sock(sock)
+        client = self._set.get_tunnel_sock(sock)
         client_ostream = self._io.get_otream(client)
         client_ostream.write(self._gen_reply(0, 1, addr, port))
         self._set.set_sock_attr(sock, status=self.ST_DATA)
-        self._set.set_sock_attr(sock, make_server_info=1)
-        self._set.print_sock_info(sock)
+        self._set.set_sock_attr(sock, make_stat="server")
+        self._set.print_sock_stat(sock)
 
 
 if __name__ == "__main__":

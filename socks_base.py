@@ -8,16 +8,18 @@ import logger
 import errno
 
 
-_log = logger.Logger("socks_base")
-
-
-class PairSockSet(object):
+class OneToOneSockSet(object):
+    """模型：
+    |browser/client|<---->|socks客户端|<------->|socks服务器|<---->|要访问服务器|
+                    n条连接              n条连接             n条连接
+    """
     SOCK_CLIENT = 1
     SOCK_SERVER = 2
 
-    def __init__(self):
+    def __init__(self, log):
         self._pairs = {}
         self._stat = {"pairs": []}
+        self._log = log
 
     def add_sock(self, sock_type, sock):
         if sock_type != self.SOCK_CLIENT:
@@ -29,11 +31,11 @@ class PairSockSet(object):
             "client": sock,
             "server": server_sock,
             "status": -1,
-            "info_index": len(self._stat["pairs"])
+            "stat_index": len(self._stat["pairs"])
         }
         self._pairs[sock] = self._pairs[server_sock] = pair
 
-        self._stat["pairs"].append({"client": self._make_sock_info(sock),
+        self._stat["pairs"].append({"client": self._make_sock_stat(sock),
                                     "server": {"fd": server_sock.fileno()},
                                     "domain": "not connected"})
 
@@ -43,18 +45,20 @@ class PairSockSet(object):
 
     def set_sock_attr(self, sock, **kwargs):
         pair = self._pairs[sock]
-        pair_info = self._get_pair_info(pair)
-        if "status" in kwargs:
-            self._pairs[sock]["status"] = kwargs["status"]
-        if "end_time" in kwargs:
-            pair_info["server"]["end"] = kwargs["end_time"]
-            pair_info["client"]["end"] = kwargs["end_time"]
-        if "domain" in kwargs:
-            pair_info["domain"] = kwargs["domain"]
-        if "make_server_info" in kwargs:
-            pair_info["server"] = self._make_sock_info(sock)
+        pair_stat = self._get_pair_stat(pair)
+        for k, v in kwargs.items():
+            if k == "status":
+                pair["status"] = v
+            elif k == "end_time":
+                pair_stat["server"]["end"] = v
+                pair_stat["client"]["end"] = v
+            elif k == "make_stat":
+                pair_stat[v] = self._make_sock_stat(sock)
+            else:
+                pair_stat[k] = v
 
-    def get_peer_sock(self, sock):
+    def get_tunnel_sock(self, sock):
+        """返回与sock关联的sock，在一对一模型中，就是相关连的sock"""
         pair = self._pairs[sock]
         if sock == pair["client"]:
             return pair["server"]
@@ -62,7 +66,7 @@ class PairSockSet(object):
             return pair["client"]
 
     def del_sock(self, sock):
-        peer_sock = self.get_peer_sock(sock)
+        peer_sock = self.get_tunnel_sock(sock)
         del self._pairs[peer_sock]
         del self._pairs[sock]
 
@@ -76,38 +80,143 @@ class PairSockSet(object):
     def __contains__(self, sock):
         return sock in self._pairs
 
-    @staticmethod
-    def _make_sock_info(sock):
+    def _make_sock_stat(self, sock):
         local_ip, local_port = sock.getsockname()
         remote_ip, remote_port = sock.getpeername()
         return {
             "fd": sock.fileno(),
             "local": local_ip + ":" + str(local_port),
             "remote": remote_ip + ":" + str(remote_port),
-            "start": _log.datetime(),
+            "start": self._log.datetime(),
             "end": "0"
         }
 
-    @staticmethod
-    def _print_sock_info(sock_info):
-        info = ", ".join(["=".join((str(k), str(v))) for k, v in sock_info.items()])
-        _log.debug("socket info: %s" % info)
+    def _print_sock_stat(self, sock_stat):
+        info = ", ".join(["=".join((str(k), str(v))) for k, v in sock_stat.items()])
+        self._log.debug("socket stat: %s" % info)
 
-    def _print_pair_info(self, pair_info):
-        _log.debug("pair info: server_fd=%d, client_fd=%d, domain=%s"
-                   % (pair_info["server"]["fd"], pair_info["client"]["fd"], pair_info["domain"]))
-        self._print_sock_info(pair_info["server"])
-        self._print_sock_info(pair_info["client"])
-        _log.blank_line()
-        _log.flush()
+    def _print_pair_stat(self, pair_stat):
+        self._log.debug("pair stat: server_fd=%d, client_fd=%d, domain=%s"
+                        % (pair_stat["server"]["fd"], pair_stat["client"]["fd"], pair_stat["domain"]))
+        self._print_sock_stat(pair_stat["server"])
+        self._print_sock_stat(pair_stat["client"])
+        self._log.blank_line()
+        self._log.flush()
 
-    def _get_pair_info(self, pair):
-        return self._stat["pairs"][pair["info_index"]]
+    def _get_pair_stat(self, pair):
+        return self._stat["pairs"][pair["stat_index"]]
 
-    def print_sock_info(self, sock):
+    def print_sock_stat(self, sock):
         pair = self._pairs[sock]
-        pair_info = self._get_pair_info(pair)
-        self._print_pair_info(pair_info)
+        pair_stat = self._get_pair_stat(pair)
+        self._print_pair_stat(pair_stat)
+
+
+class MultiToOneSockSet(object):
+    """模型：
+    |browser/client|<---->|socks客户端|<------->|socks服务器|<---->|要访问服务器|
+                    n条连接           m条连接(m<=5)          n条连接
+    """
+    SOCK_END = 1
+    SOCK_CONN = 2
+
+    def __init__(self, log):
+        self._ends = {}
+        self._conns = {}
+        self._stat = []
+        self._id = 1
+        self._end_id = -1
+        self._log = log
+
+    def add_sock(self, sock_type, sock, conn_id=-1):
+        if sock_type == self.SOCK_END:
+            self._ends[sock] = {
+                "stat_index": len(self._stat),
+                "id": self._end_id
+            }
+            self._end_id -= 1
+        elif sock_type == self.SOCK_CONN:
+            if conn_id == -1:
+                conn_id = self._id
+            self._conns[sock] = {
+                "id": conn_id,
+                "status": -1,
+                "stat_index": len(self._stat)
+            }
+            self._id += 1
+        self._stat.append(self._make_sock_stat(sock))
+
+    def get_sock_attr(self, sock, attr):
+        return self._conns[sock][attr]
+
+    def set_sock_attr(self, sock, **kwargs):
+        sock_info = self._get_sock_info(sock)
+        sock_stat = self._stat[sock_info["stat_index"]]
+        for k, v in kwargs.items():
+            if k == "status":
+                sock_info["status"] = v
+            elif k == "end_time":
+                sock_stat["end"] = v
+            elif k == "make_info":
+                self._stat[sock_info["stat_index"]] = self._make_sock_stat(sock)
+            else:
+                sock_stat[k] = v
+
+    def get_conn_sock(self, conn_id):
+        try:
+            return filter(lambda x: x[1]["id"] == conn_id, self._conns.items())[0][0]
+        except IndexError:
+            return None
+
+    def get_end_sock(self):
+        return self._ends.keys()[0]
+
+    def del_sock(self, sock):
+        if sock in self._conns:
+            del self._conns[sock]
+        elif sock in self._ends:
+            del self._ends[sock]
+
+    def sock_type(self, sock):
+        if sock in self._conns:
+            return self.SOCK_CONN
+        elif sock in self._ends:
+            return self.SOCK_END
+
+    def __contains__(self, sock):
+        return sock in self._conns or sock in self._ends
+
+    def _get_sock_info(self, sock):
+        if sock in self._conns:
+            return self._conns[sock]
+        elif sock in self._ends:
+            return self._ends[sock]
+
+    def _make_sock_stat(self, sock):
+        local_ip, local_port = sock.getsockname()
+        try:
+            remote_ip, remote_port = sock.getpeername()
+        except socket.error:
+            return {
+                "fd": sock.fileno(),
+                "domain": "not connected"
+            }
+
+        return {
+            "fd": sock.fileno(),
+            "id": self._get_sock_info(sock)["id"],
+            "local": local_ip + ":" + str(local_port),
+            "remote": remote_ip + ":" + str(remote_port),
+            "start": self._log.datetime(),
+            "end": "active",
+            "domain": "not connected"
+        }
+
+    def print_sock_stat(self, sock):
+        sock_info = self._get_sock_info(sock)
+        sock_stat = self._stat[sock_info["stat_index"]]
+        info = ", ".join(["=".join((str(k), str(v))) for k, v in sock_stat.items()])
+        self._log.debug("socket stat: %s" % info)
 
 
 class SocksBase(object):
@@ -125,6 +234,7 @@ class SocksBase(object):
 
         self._io = tcp_event.TcpEvent()
         self._io.add_sock(server_sock, on_accept=self._on_accept)
+        self._log = logger.Logger(self.__class__.__name__)
 
     def run(self):
         self._io.run()
@@ -189,7 +299,7 @@ class SocksBase(object):
         pass
 
     def _on_error(self, sock, err_code):
-        _log.debug("error: fd=%d, %s" % (sock.fileno(), os.strerror(err_code)))
+        self._log.error("error: fd=%d, %s" % (sock.fileno(), os.strerror(err_code)))
 
     def _on_close(self, sock):
         pass

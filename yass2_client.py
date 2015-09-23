@@ -2,24 +2,23 @@
 
 import tcp_event
 import socket
-import logger
 import yass_base
 
-_log = logger.Logger("socks_base")
 
-
-class YASS2Client(yass_base.YASSBase):
+class YASS2Client(yass_base.YASSMultiToOneBase):
     def __init__(self, config):
         super(YASS2Client, self).__init__(config, "client")
 
-        server_sock = socket.socket()
-        server_sock.setblocking(False)
-        self._connect_server(server_sock, self._config["server"], self._config["server_port"])
-        self._peers.append(server_sock)
-        self._id = 1
+        end_sock = socket.socket()
+        end_sock.setblocking(False)
+        self._connect_server(end_sock, self._config["server"], self._config["server_port"])
+
+        self._set.add_sock(self._set.SOCK_END, end_sock)
 
     def _on_connect(self, sock, istream, ostream):
-        _log.info("connect success, addr=" + str(sock.getpeername()))
+        self._log.info("connect yass2 server success")
+        self._set.set_sock_attr(sock, make_stat="end")
+        self._set.print_sock_stat(sock)
 
     def _on_accept(self, server_sock, new_sock):
         new_sock.setblocking(False)
@@ -28,39 +27,41 @@ class YASS2Client(yass_base.YASSBase):
                           on_close=self._on_close,
                           on_error=self._on_error)
 
-        self._new_conn(new_sock, self._id)
-        self._id += 1
+        self._set.add_sock(self._set.SOCK_CONN, new_sock)
+        self._set.set_sock_attr(new_sock, status=self.ST_BEGIN)
 
     def _on_read(self, sock, istream, ostream):
-        if sock in self._peers:
-            try:
-                while True:
-                    try:
-                        frame_tuple = self._recv_frame(istream)
-                    except ValueError:
-                        # data corrupted, should not happen
-                        _log.error("Fatal error, data corrupted")
-                        exit(11)
+        sock_type = self._set.sock_type(sock)
+        if sock_type == self._set.SOCK_END:
+            while True:
+                try:
+                    frame_tuple = self._recv_frame(istream, True)
+                except ValueError:
+                    # data corrupted, should not happen
+                    self._log.error("Fatal error, data corrupted")
+                    exit(11)
+                except tcp_event.StreamClosed:
+                    break
+                if frame_tuple is None:
+                    break
 
-                    if frame_tuple is not None:
-                        frame_type, conn_id, data = frame_tuple
-                        conn_sock = self._get_conn(conn_id)
-                        if conn_sock is None:
-                            return
-                        conn_ostream = self._io.get_otream(conn_sock)
-                        if frame_type == self.FRAME_DATA:
-                            conn_ostream.write(data)
-                        elif frame_type == self.FRAME_DELCONN:
-                            self._del_conn(conn_id)
-                            conn_ostream.close()
-                    else:
-                        break
-            except tcp_event.StreamClosed:
-                pass
-        elif sock in self._socks:
-            sock_info = self._socks[sock]
-            conn_id = sock_info["id"]
-            if sock_info["status"] == self.ST_BEGIN:
+                frame_type, conn_id, data = frame_tuple
+                conn_sock = self._set.get_conn_sock(conn_id)
+                if conn_sock is None:
+                    continue
+                conn_ostream = self._io.get_otream(conn_sock)
+                if frame_type == self.FRAME_DATA:
+                    # try:
+                    conn_ostream.write(data)
+                    # except tcp_event.StreamClosed:
+                    #    pass
+                elif frame_type == self.FRAME_DELCONN:
+                    self._set.del_sock(conn_sock)
+                    conn_ostream.close()
+
+        elif sock_type == self._set.SOCK_CONN:
+            status = self._set.get_sock_attr(sock, "status")
+            if status == self.ST_BEGIN:
                 try:
                     auth = istream.read_all()
                     reply = self._socks5_auth(auth)
@@ -72,9 +73,9 @@ class YASS2Client(yass_base.YASSBase):
                     ostream.close()
                     return
                 ostream.write(reply)
-                sock_info["status"] = self.ST_AUTH
+                self._set.set_sock_attr(sock, status=self.ST_AUTH)
 
-            elif sock_info["status"] == self.ST_AUTH:
+            elif status == self.ST_AUTH:
                 try:
                     request = istream.read_all()
                 except tcp_event.StreamClosed:
@@ -86,16 +87,20 @@ class YASS2Client(yass_base.YASSBase):
                     ostream.write(self._gen_reply(7))
                     ostream.close()
                     return
+
                 ostream.write(self._gen_reply(0, addr_type, addr, port))
                 socks_address = self._pack_socks_address(addr_type, addr, port)
-                self._send_newconn_frame(conn_id, socks_address)
-                sock_info["status"] = self.ST_DATA
+                self._send_newconn_frame(sock, socks_address)
 
-            elif sock_info["status"] == self.ST_DATA:
+                self._set.set_sock_attr(sock, domain=addr)
+                self._set.print_sock_stat(sock)
+                self._set.set_sock_attr(sock, status=self.ST_DATA)
+
+            elif status == self.ST_DATA:
                 try:
                     data = istream.read_all()
                     if len(data) != 0:
-                        self._send_data_frame(conn_id, data)
+                        self._send_data_frame(sock, data)
                 except tcp_event.StreamClosed:
                     pass
 

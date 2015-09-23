@@ -4,7 +4,7 @@ import time
 from functools import partial
 
 
-class Logger:
+class Logger(object):
 
     _categories = {
         "INFO": True,
